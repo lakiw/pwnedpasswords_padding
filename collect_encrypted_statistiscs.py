@@ -3,7 +3,7 @@
 
 ########################################################################################
 #
-# Name: Querys pwned passwords service and saves the result
+# Name: Collects statistics of HTTPS encrypted sessions
 #
 #  Written by Matt Weir
 #
@@ -24,9 +24,10 @@
 #
 #  Contact Info: cweir@vt.edu
 #
-#  query_pwned_passwords.py
+#  collect_encrypted_statistics.py
 #
 #########################################################################################
+
 
 
 # Including this to print error message if python < 3.0 is used
@@ -41,8 +42,7 @@ if sys.version_info[0] < 3:
 import argparse
 
 # Local imports
-from lib_query.pwned_passwords_api import get_list_for_hash, dns_lookup
-from lib_query.hash_prefix import HashPrefix
+from lib_sniffer.pyshark_functions import sniff_pwnedpasswords_sessions
 
        
 ## Parses the command line
@@ -75,22 +75,11 @@ def parse_command_line(program_info):
         required = False,
         default = program_info['filename']
     )
-    
-    # Allows querying a static hash prefix vs looping through all of them
-    parser.add_argument(
-        '--static_prefix',
-        '-s',
-        help = 'Specifies a static hash prefix to continously query. If not specified, will loop through all hash prefixes', 
-        metavar = 'STATIC_HASH_PREFIX',
-        required = False,
-        default = program_info['static_prefix']
-    )
       
     # Parse all the args and save them    
     args=parser.parse_args() 
     
     program_info['filename'] = args.filename
-    program_info['static_prefix'] = args.static_prefix
 
     return True 
   
@@ -103,12 +92,11 @@ def main():
     program_info = {
     
         # Program and Contact Info
-        'name':'Pwned Passwords Query Agent',
+        'name':'HTTPS Statistics Collector',
         'version': '1.0',
         'author':'Matt Weir',
         'contact':'cweir@vt.edu',
         'filename': None,
-        'static_prefix': None,
 
     }
     
@@ -122,50 +110,10 @@ def main():
     print("Version: " + str(program_info['version']),file=sys.stderr)
     print('',file=sys.stderr)
     
-    ## Initialize the hash prefix to start doing lookups on
+    # Start sniffing for pwnedpassword sessions
+    sniff_pwnedpasswords_sessions() 
     
-    # If static_prefix was specified on the command line:
-    if program_info['static_prefix'] != None:
-        initial_prefix = program_info['static_prefix']
-        prefix_len = len(program_info['static_prefix'])
-    
-    # Otherwise, start at the default '00000'
-    else:
-        initial_prefix = '00000'
-        prefix_len = 5
-        
-    hash_prefix = HashPrefix(initial= initial_prefix, length= prefix_len)
-    
-    # Open the file if not writing to stdout
-    if program_info['filename'] != None:
-        save_file = open(program_info['filename'], 'w')
-    
-    # Used to specify if the queries should continue
-    keep_querying = True
-    
-    # Start querying the pwned passwords service
-    while (keep_querying):
-        status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/range/',hash_prefix.get_value())
-        
-        result = str(hash_prefix.get_value() + '\t' + str(status_code) + "\t" + str(len(content)))
-        
-        # Output the results
-        if program_info['filename'] != None:
-            save_file.write(result + '\n')
-            print(result)
-            
-        else:
-            print(result)
-            
-        # If looping through prefixes increment it
-        if program_info['static_prefix'] == None:
-            # If we are at the end of the keyspace, stop querying
-            if hash_prefix.increment() != 0:
-                keep_querying = False
-  
-    # Close the file
-    if program_info['filename'] != None:
-        save_file.close()
+
     
 if __name__ == "__main__":
     main()
