@@ -28,9 +28,10 @@ def sniff_pwnedpasswords_sessions(time = 5, interface = None):
         capture = pyshark.LiveCapture(bpf_filter='tcp port 443', interface=interface)
     else:
         capture = pyshark.LiveCapture(bpf_filter='tcp port 443')
-    capture = pyshark.LiveCapture(bpf_filter='tcp port 443')
+
     capture.sniff(timeout= time)
-    extract_pp_sessions(capture)
+    captured_sessions = extract_pp_sessions(capture)
+    return captured_sessions
     
 
 ## Attempt to extract pwned password sessions from a capture
@@ -60,7 +61,7 @@ def extract_pp_sessions(capture):
                 # shows up in a normal html string, but with filtering on port
                 # tcp 443, that should limit the number of false positives
                 if capture[i].tcp.payload.find("61:70:69:2e:70:77:6e:65:64:70:61:73:73:77:6f:72:64:73:2e:63:6f:6d") != -1:
-                    print("Found a potential pwned passwords request!")
+                    #print("Found a potential pwned passwords request!")
                     # Create a new item for the session and initialize it
                     pp_sessions[session_id] = {'packet_ids':[i], 'num_packets':1, 'size':0,'dst_ip':str(capture[i].ip.dst), 'finished':False}
               
@@ -91,8 +92,12 @@ def extract_pp_sessions(capture):
             print(str(msg))
             continue
         
-
+    # The list of all sessions where valid statistics have been collected    
+    captured_sessions = []
+    
+    # Add the valid sessions to the return value
     for session in pp_sessions.values():
         if session['finished'] == True:
-            print(session['size'])
+            captured_sessions.append(session['size'])
 
+    return captured_sessions

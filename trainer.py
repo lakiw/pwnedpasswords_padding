@@ -3,7 +3,8 @@
 
 ########################################################################################
 #
-# Name: Collects statistics of HTTPS encrypted sessions
+# Name: Trains a sniffer on what non-padded responses correspond to submitted
+#       hash prefixes.
 #
 #  Written by Matt Weir
 #
@@ -24,10 +25,9 @@
 #
 #  Contact Info: cweir@vt.edu
 #
-#  collect_encrypted_statistics.py
+#  trainer.py
 #
 #########################################################################################
-
 
 
 # Including this to print error message if python < 3.0 is used
@@ -40,9 +40,12 @@ if sys.version_info[0] < 3:
 
 # Global imports    
 import argparse
+import time
+from multiprocessing import Process, Queue
 
 # Local imports
-from lib_sniffer.pyshark_functions import sniff_pwnedpasswords_sessions
+from lib_query.query_process import launch_query_process
+from lib_sniffer.sniffer_process import launch_sniffer_process
 
        
 ## Parses the command line
@@ -76,21 +79,55 @@ def parse_command_line(program_info):
         default = program_info['filename']
     )
     
-    # How long to sniff traffic on the wire (in seconds)
+    # Start at the specified index, (vs 0), and append to a training set if it
+    # already exists
     parser.add_argument(
-        '--time',
+        '--start_prefix',
+        '-s',
+        help = 'Starts querying from the specified prefix, and will append to a training file if it already exists', 
+        metavar = 'START_HASH_PREFIX',
+        required = False,
+        default = program_info['start_prefix']
+    )
+    
+    # The default time chunks the sniffer should sniff for
+    parser.add_argument(
+        '--time_interval',
         '-t',
-        help = 'How long to sniff traffic for pwned password hash lookups (in secondos)', 
+        help = 'The default time interval (seconds) the sniffer should run for when training on each hash prefix. Default is ' +str(program_info['time_interval']), 
         metavar = 'SECONDS',
         required = False,
-        default = program_info['sniff_time']
+        default = program_info['time_interval']
+    )
+    
+    # The minimum number of samples to collect for each hash prefix
+    parser.add_argument(
+        '--num_samples',
+        '-n',
+        help = 'The minimum number of samples to collect for each hash previx. Default is ' +str(program_info['num_samples']), 
+        metavar = 'MINIMUM_SAMPLES',
+        required = False,
+        default = program_info['num_samples']
+    )
+    
+    # The interface to sniff on
+    parser.add_argument(
+        '--interface',
+        '-i',
+        help = 'The network interface to sniff on. Default will sniff on all interfaces', 
+        metavar = 'INTERFACE_ID',
+        required = False,
+        default = program_info['interface']
     )
       
     # Parse all the args and save them    
     args=parser.parse_args() 
     
     program_info['filename'] = args.filename
-    program_info['sniff_time'] = args.time
+    program_info['start_prefix'] = args.start_prefix
+    program_info['time_interval'] = args.time_interval
+    program_info['num_samples'] = args.num_samples
+    program_info['interface'] = args.interface
 
     return True 
   
@@ -103,13 +140,15 @@ def main():
     program_info = {
     
         # Program and Contact Info
-        'name':'HTTPS Statistics Collector',
+        'name':'Pwned Passwords Padding Trainer',
         'version': '1.0',
         'author':'Matt Weir',
         'contact':'cweir@vt.edu',
         'filename': None,
-        'sniff_time': 5,
-
+        'start_prefix': None,
+        'time_interval': 5,
+        'num_samples': 20,
+        'interface': None,
     }
     
     # Parsing the command line
@@ -122,8 +161,27 @@ def main():
     print("Version: " + str(program_info['version']),file=sys.stderr)
     print('',file=sys.stderr)
     
-    # Start sniffing for pwnedpassword sessions
-    sniff_pwnedpasswords_sessions(time = program_info['sniff_time']) 
+    # Spawn off the querying process
+    query_ptoc_queue = Queue()
+    query_ctop_queue = Queue()
+    query_process = Process(target=launch_query_process, args=("https://api.pwnedpasswords.com/range/", query_ptoc_queue, query_ctop_queue,))
+    query_process.start()
+    
+    # Spawn off the sniffer process
+    sniffer_ptoc_queue = Queue()
+    sniffer_ctop_queue = Queue()
+    sniffer_process = Process(target=launch_sniffer_process, args=(program_info['time_interval'], program_info['num_samples'], program_info['interface'], sniffer_ptoc_queue, sniffer_ctop_queue,))
+    sniffer_process.start()
+    
+    
+    query_ptoc_queue.put("00000")
+    sniffer_ptoc_queue.put({'action':'scan'})
+    
+    
+    # Clean up and exit
+    query_process.join()
+    sniffer_process.join()
+    
     
 
     
