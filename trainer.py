@@ -46,6 +46,7 @@ from multiprocessing import Process, Queue
 # Local imports
 from lib_query.query_process import launch_query_process
 from lib_sniffer.sniffer_process import launch_sniffer_process
+from lib_query.hash_prefix import HashPrefix
 
        
 ## Parses the command line
@@ -173,9 +174,43 @@ def main():
     sniffer_process = Process(target=launch_sniffer_process, args=(program_info['time_interval'], program_info['num_samples'], program_info['interface'], sniffer_ptoc_queue, sniffer_ctop_queue,))
     sniffer_process.start()
     
+    # Create the hash_prefix object that will specify the current prefix to
+    # target
     
-    query_ptoc_queue.put("00000")
-    sniffer_ptoc_queue.put({'action':'scan'})
+    # If static_prefix was specified on the command line:
+    if program_info['start_prefix'] != None:
+        initial_prefix = program_info['start_prefix']
+        prefix_len = len(program_info['start_prefix'])
+    
+    # Otherwise, start at the default '00000'
+    else:
+        initial_prefix = '00000'
+        prefix_len = 5
+        
+    hash_prefix = HashPrefix(initial= initial_prefix, length= prefix_len)
+    
+    # Used to specify if the queries should continue
+    keep_querying = True
+    
+    # Start querying the pwned passwords service
+    while (keep_querying):
+        # Start querying the hash prefix
+        query_ptoc_queue.put(hash_prefix.get_value())
+        
+        # Wait a short delay to give the query time to start
+        time.sleep(0.2)
+        
+        # Start collecting statistics on the queries
+        sniffer_ptoc_queue.put({'action':'scan'})
+        
+        # Collect and save the data
+        results = sniffer_ctop_queue.get()
+        print(str(hash_prefix.get_value()) + " : " + str(results))
+        
+        # Increment the hash prefix
+        # If we are at the end of the keyspace, stop querying
+        if hash_prefix.increment() != 0:
+            keep_querying = False
     
     
     # Clean up and exit

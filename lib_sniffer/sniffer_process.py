@@ -55,7 +55,7 @@ def launch_sniffer_process(interval_time, num_samples, interface, ptoc_queue, ct
             while len(saved_sessions) < num_samples :
                 saved_sessions.extend(sniff_pwnedpasswords_sessions(time = interval_time, interface = interface))
              
-            print(saved_sessions)
+            ctop_queue.put(saved_sessions)
         # End the sniffing sessions and exit        
         elif command['action'] == 'stop' :
             break

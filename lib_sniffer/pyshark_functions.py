@@ -40,9 +40,9 @@ def sniff_pwnedpasswords_sessions(time = 5, interface = None):
 #       for me, so need to save and iterate through the list. Should work
 #       for a PoC but may end up having to go back to scapy for packet capture    
 def extract_pp_sessions(capture):
-    print("Parsing sessions",file=sys.stderr)
+    #print("Parsing sessions",file=sys.stderr)
     capture_size = len(capture)
-    print("Number of packets captures: " + str(capture_size), file=sys.stderr)
+    #print("Number of packets captures: " + str(capture_size), file=sys.stderr)
 
     # Holds the ranges for the sessions idenfied as potentially querying 
     # pwned passwords. Key is session_id to allow for querying out of order
@@ -89,7 +89,7 @@ def extract_pp_sessions(capture):
                         pp_sessions[session_id]['finished'] = True
             
         except Exception as msg:
-            print(str(msg))
+            #print(str(msg))
             continue
         
     # The list of all sessions where valid statistics have been collected    
