@@ -35,19 +35,30 @@ def launch_query_process(url, ptoc_queue, ctop_queue):
         # Query the queue to see if there is a new hash to use
         # Note: if queue is empty will throw an exception
         try:
-            new_hash = ptoc_queue.get_nowait()
-            hash_prefix = new_hash
+            command = ptoc_queue.get_nowait()
+            if command['action'] == 'query':
+                hash_prefix = command['prefix']
+                
+            # If it is not a query, exit
+            else:
+                break
+                
         except queue.Empty:
             pass
         
         # Query the pwned passwords service
         if hash_prefix != None:
-            status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/range/',hash_prefix)
+        
+            try:
+                status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/range/',hash_prefix)
+            except:
+                continue
             
             # If an error status code appears
             if str(status_code) != "200":
                 # Let the main process know
                 ctop_queue.put({'prefix':hash_prefix, 'status':str(status_code)})
+                print("Prefix: " + str(hash_prefix) + " : " + str(status_code))
                 # Sleep for a second in case rate limiting is occuring
                 time.sleep(1)
             

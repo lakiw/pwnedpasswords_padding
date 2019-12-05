@@ -42,10 +42,12 @@ if sys.version_info[0] < 3:
 import argparse
 import time
 from multiprocessing import Process, Queue
+import json
+import threading # Used only for the "check for user input" threads
 
 # Local imports
 from lib_query.query_process import launch_query_process
-from lib_sniffer.sniffer_process import launch_sniffer_process
+from lib_sniffer.training_sniffer import TrainingSniffer
 from lib_query.hash_prefix import HashPrefix
 
        
@@ -132,6 +134,15 @@ def parse_command_line(program_info):
 
     return True 
   
+
+###########################################################################################
+# Used to check to see if a key was pressed to output program status
+# *Hopefully* should work on multiple OSs
+# --Simply check user_input_char to see if it is not none
+###########################################################################################
+def keypress(user_input_ref):
+    user_input_ref[0] = input()
+    
   
 ## Main function, starts everything off
 #    
@@ -147,7 +158,7 @@ def main():
         'contact':'cweir@vt.edu',
         'filename': None,
         'start_prefix': None,
-        'time_interval': 5,
+        'time_interval': 10,
         'num_samples': 20,
         'interface': None,
     }
@@ -168,11 +179,16 @@ def main():
     query_process = Process(target=launch_query_process, args=("https://api.pwnedpasswords.com/range/", query_ptoc_queue, query_ctop_queue,))
     query_process.start()
     
-    # Spawn off the sniffer process
-    sniffer_ptoc_queue = Queue()
-    sniffer_ctop_queue = Queue()
-    sniffer_process = Process(target=launch_sniffer_process, args=(program_info['time_interval'], program_info['num_samples'], program_info['interface'], sniffer_ptoc_queue, sniffer_ctop_queue,))
-    sniffer_process.start()
+    ## Set up the check to see if a user is pressing a button
+    #
+    user_input = [None]
+    user_thread = threading.Thread(target=keypress, args=(user_input,))
+    user_thread.daemon = True  # thread dies when main thread (only non-daemon thread) exits.
+    user_thread.start()
+    
+    
+    # Create the TrainingSniffer instance
+    sniffer = TrainingSniffer(program_info['time_interval'], program_info['num_samples'], program_info['interface'])
     
     # Create the hash_prefix object that will specify the current prefix to
     # target
@@ -189,36 +205,66 @@ def main():
         
     hash_prefix = HashPrefix(initial= initial_prefix, length= prefix_len)
     
+    # Open up the save file if specified
+    if program_info['filename'] != None:
+        # If a hash prefix is specified, append vs overwrite
+        if program_info['start_prefix'] != None:
+            save_file = open(program_info['filename'], 'a')
+        else:
+            save_file = open(program_info['filename'], 'w')
+    
+    
     # Used to specify if the queries should continue
     keep_querying = True
     
     # Start querying the pwned passwords service
     while (keep_querying):
         # Start querying the hash prefix
-        query_ptoc_queue.put(hash_prefix.get_value())
+        query_ptoc_queue.put({'action':'query', 'prefix':hash_prefix.get_value()})
         
         # Wait a short delay to give the query time to start
-        time.sleep(0.2)
+        time.sleep(5)
         
         # Start collecting statistics on the queries
-        sniffer_ptoc_queue.put({'action':'scan'})
+        results = sniffer.start_training()
         
-        # Collect and save the data
-        results = sniffer_ctop_queue.get()
-        print(str(hash_prefix.get_value()) + " : " + str(results))
+        # To keep the save file smaller, only save the minimum and maximum value
+        #minimum_size = min(results)
+        #maximum_size = max(results)
+        print()
+        print(hash_prefix.get_value())
+        print(results)
         
+        # Save to file if a file was specified
+        if program_info['filename'] != None:
+            save_results ={hash_prefix.get_value():results}
+            json.dump(save_results, save_file)
+            save_file.write("\n")
+               
         # Increment the hash prefix
         # If we are at the end of the keyspace, stop querying
         if hash_prefix.increment() != 0:
             keep_querying = False
-    
-    
+            
+        ##--Check for user requested status output--##
+        if user_input[0] is not None: 
+            if user_input[0] == 'q':
+                query_ptoc_queue.put({'action':'exit'})
+                break
+                
+            user_input[0] = None
+            ##--Kick off again the thread to check if user_input was entered
+            if not user_thread.is_alive():
+                user_thread = threading.Thread(target=keypress, args=(user_input,))
+                user_thread.daemon = True  # thread dies when main thread (only non-daemon thread) exits.
+                user_thread.start()    
+      
     # Clean up and exit
     query_process.join()
-    sniffer_process.join()
     
+    if program_info['filename'] != None:
+        save_file.close()
     
 
-    
 if __name__ == "__main__":
     main()
