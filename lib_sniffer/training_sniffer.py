@@ -38,18 +38,16 @@ class TrainingSniffer:
     ## Sniff the network interface and collect statistics on the pp sessions
     #
     def start_training(self):
-
         saved_sessions = []
         
         # Keep trying to collect samples untill it has collected the minimum
         # amount
         while len(saved_sessions) < self.num_samples :
-            print("Sniffing Wire")
+            #print("Sniffing Wire")
             saved_sessions.extend(self.sniff_pwnedpasswords_sessions())
-            
-            print(saved_sessions)
-         
-            return self._format_results(saved_sessions)
+            #print(saved_sessions)
+        
+        return self._format_results(saved_sessions)
         
                
     ## Sniffs traffic on an interface and tries to identify pwnedpasswords
@@ -78,7 +76,10 @@ class TrainingSniffer:
 
         ## Process packets
         #
+        #i  = 1
         for packet in capture:
+            #print("Processing Packet: " + str(i))
+            #i+= 1
         
             # Only look at TCP packets
             if scapy.TCP not in packet:
@@ -124,7 +125,7 @@ class TrainingSniffer:
                     app_string = raw_payload[data_index+6:data_index+10]  
                     if len(app_string) == 0:
                         sessions[dst_port]['valid'] = False
-                        continue
+                        break
                     
                     app_size = int(app_string, 16)
                     
@@ -133,6 +134,7 @@ class TrainingSniffer:
                     # Advance to the next chunk and see if there is more data to process
                     raw_payload = raw_payload[(data_index + 10 + (app_size*2)):]
                     data_index = raw_payload.find('170303')
+
                     
                 # Check to make sure the packet isn't repeated
                 sequence_num = packet[scapy.TCP].seq

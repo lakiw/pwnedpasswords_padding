@@ -167,6 +167,7 @@ def main():
     query_ptoc_queue = Queue()
     query_ctop_queue = Queue()
     query_process = Process(target=launch_query_process, args=("https://api.pwnedpasswords.com/range/", query_ptoc_queue, query_ctop_queue,))
+    query_process.daemon = True
     query_process.start()
     
     # Create the TrainingSniffer instance
@@ -199,41 +200,40 @@ def main():
     # Used to specify if the queries should continue
     keep_querying = True
     
-    # Start querying the pwned passwords service
-    while (keep_querying):
-        # Start querying the hash prefix
-        query_ptoc_queue.put({'action':'query', 'prefix':hash_prefix.get_value()})
-        
-        # Wait a short delay to give the query time to start
-        time.sleep(5)
-        
-        # Start collecting statistics on the queries
-        results = None
-        try:
-            results = sniffer.start_training()
-        except Exception as msg:
-            print("Exception: " +  str(msg))
-        
-        # To keep the save file smaller, only save the minimum and maximum value
-        #minimum_size = min(results)
-        #maximum_size = max(results)
-        print()
-        print(hash_prefix.get_value())
-        print(results)
-        
-        # Save to file if a file was specified
-        if program_info['filename'] != None:
-            save_results ={hash_prefix.get_value():results}
-            json.dump(save_results, save_file)
-            save_file.write("\n")
-               
-        # Increment the hash prefix
-        # If we are at the end of the keyspace, stop querying
-        if hash_prefix.increment() != 0:
-            keep_querying = False
+    try:
+        # Start querying the pwned passwords service
+        while (keep_querying):
+            # Start querying the hash prefix
+            query_ptoc_queue.put({'action':'query', 'prefix':hash_prefix.get_value()})
             
-        query_ptoc_queue.put({'action':'stop'})    
-        break
+            # Wait a short delay to give the query time to start
+            time.sleep(5)
+            
+            # Start collecting statistics on the queries
+            results = sniffer.start_training()
+            
+            # To keep the save file smaller, only save the minimum and maximum value
+            #minimum_size = min(results)
+            #maximum_size = max(results)
+            print()
+            print(hash_prefix.get_value())
+            print(results)
+            
+            # Save to file if a file was specified
+            if program_info['filename'] != None:
+                save_results ={hash_prefix.get_value():results}
+                json.dump(save_results, save_file)
+                save_file.write("\n")
+                   
+            # Increment the hash prefix
+            # If we are at the end of the keyspace, stop querying
+            if hash_prefix.increment() != 0:
+                keep_querying = False
+                
+    except Exception as msg:
+        print ("Exception: " + str(msg))
+            
+    query_ptoc_queue.put({'action':'stop'})    
       
     # Clean up and exit
     query_process.join()
