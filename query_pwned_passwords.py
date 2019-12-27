@@ -145,7 +145,7 @@ def main():
     
     # Start querying the pwned passwords service
     while (keep_querying):
-        status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/range/',hash_prefix.get_value())
+        status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/', 'range/',hash_prefix.get_value())
         
         result = str(hash_prefix.get_value() + '\t' + str(status_code) + "\t" + str(len(content)))
         

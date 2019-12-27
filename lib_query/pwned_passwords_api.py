@@ -10,8 +10,23 @@
 
 import sys
 import requests
-import socket
-    
+
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.poolmanager import PoolManager
+import ssl
+
+
+## This allows custom modification of TLS parameters
+#
+# Currently forcing TLS version 1.2
+#
+class MyAdapter(HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = PoolManager(num_pools=connections,
+                                   maxsize=maxsize,
+                                   block=block,
+                                   ssl_version=ssl.PROTOCOL_TLSv1_2)
+
     
 ## Retrieves a response from pwned passwordsfor a given hash prefix.
 #
@@ -19,11 +34,16 @@ import socket
 #
 #   url: The base URL to query for pwned passwords
 #
+#   query: The query string to use after the URL
+#
 #   hash_prefix: The hash prefix to look update
 #
-def get_list_for_hash(url, hash_prefix):
+def get_list_for_hash(url, query, hash_prefix):
 
-    r = requests.get(url + hash_prefix, stream=True)
+    s = requests.Session()
+    s.mount('https://', MyAdapter())
+
+    r = s.get(url + query + hash_prefix, stream=True)
         
     return r.status_code, r.content
     

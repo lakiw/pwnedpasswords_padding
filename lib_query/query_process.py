@@ -50,7 +50,7 @@ def launch_query_process(url, ptoc_queue, ctop_queue):
         if hash_prefix != None:
         
             try:
-                status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/range/',hash_prefix)
+                status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/', 'range/', hash_prefix)
             except:
                 continue
             

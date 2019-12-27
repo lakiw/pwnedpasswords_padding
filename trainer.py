@@ -43,7 +43,6 @@ import argparse
 import time
 from multiprocessing import Process, Queue
 import json
-import threading # Used only for the "check for user input" threads
 
 # Local imports
 from lib_query.query_process import launch_query_process
@@ -135,15 +134,6 @@ def parse_command_line(program_info):
     return True 
   
 
-###########################################################################################
-# Used to check to see if a key was pressed to output program status
-# *Hopefully* should work on multiple OSs
-# --Simply check user_input_char to see if it is not none
-###########################################################################################
-def keypress(user_input_ref):
-    user_input_ref[0] = input()
-    
-  
 ## Main function, starts everything off
 #    
 def main():
@@ -178,14 +168,6 @@ def main():
     query_ctop_queue = Queue()
     query_process = Process(target=launch_query_process, args=("https://api.pwnedpasswords.com/range/", query_ptoc_queue, query_ctop_queue,))
     query_process.start()
-    
-    ## Set up the check to see if a user is pressing a button
-    #
-    user_input = [None]
-    user_thread = threading.Thread(target=keypress, args=(user_input,))
-    user_thread.daemon = True  # thread dies when main thread (only non-daemon thread) exits.
-    user_thread.start()
-    
     
     # Create the TrainingSniffer instance
     sniffer = TrainingSniffer(program_info['time_interval'], program_info['num_samples'], program_info['interface'])
@@ -226,7 +208,11 @@ def main():
         time.sleep(5)
         
         # Start collecting statistics on the queries
-        results = sniffer.start_training()
+        results = None
+        try:
+            results = sniffer.start_training()
+        except Exception as msg:
+            print("Exception: " +  str(msg))
         
         # To keep the save file smaller, only save the minimum and maximum value
         #minimum_size = min(results)
@@ -246,18 +232,8 @@ def main():
         if hash_prefix.increment() != 0:
             keep_querying = False
             
-        ##--Check for user requested status output--##
-        if user_input[0] is not None: 
-            if user_input[0] == 'q':
-                query_ptoc_queue.put({'action':'exit'})
-                break
-                
-            user_input[0] = None
-            ##--Kick off again the thread to check if user_input was entered
-            if not user_thread.is_alive():
-                user_thread = threading.Thread(target=keypress, args=(user_input,))
-                user_thread.daemon = True  # thread dies when main thread (only non-daemon thread) exits.
-                user_thread.start()    
+        query_ptoc_queue.put({'action':'stop'})    
+        break
       
     # Clean up and exit
     query_process.join()
