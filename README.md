@@ -15,7 +15,7 @@ A lessor concern is that this type of attack could also be weaponized and includ
 #### Mitigating Impact Factors
 - The Pwned Passwords API calls do not include the username of the user submitting the request, or the account the lookup is associated with.  This info would need to be learned by an attacker via another method.
 - Just because a user submits a password as part of a query does not mean they are currently using that password for any active account.
-- While 20 bits of a password hash would reduce the keyspace significantly, an attacker would still likely have to deal with a high number of collisions. when attempting to guess the plaintext password the user selected. To put things in context, against fast password hashes, attackers usually generate billions of guesses a second, which would correlate to around 1 thousand hits/false positive matches a second.
+- While 20 bits of a password hash would reduce the keyspace significantly, an attacker would still likely have to deal with a high number of collisions when attempting to guess the plaintext password the user selected. To put things in context, against fast password hashes, attackers usually generate billions of guesses a second, which would correlate to around 1 thousand hits/false positive matches a second.
 
 #### Current Threat Assesment
 - Regardless of the exploitability of the information, giving an attacker 20 bits of your password hash is not a situation that I would be comfortable with.
@@ -81,7 +81,8 @@ The training file is the one that was previously created during the training sta
 
 ## Findings to Date:
 From a basic Proof of Concept standpoint, the attack seems feasible.
-- Trained on over 172 hash prefixes.
-- The sniffer is able to differentiate between them from passive https sniffing ... when the sniffer is working. 
-- The sniffer, (and for that matter the trainer), will frequently stop working and basically record the size of the https sessions as garbage. This is almost certainly related to how poorly the TLS parser is currently written. Basically it seems like when I have a "good/reliable" internet connection it works ok, but the second the connection gets weird all my parsing goes out the window.
+- Results of analyizng the different sized results of the plaintext results can be seen in the included pwned_passwords_plaintext.txt. These were collected using the query_pwned_passwords.py tool. They show a significant variation in size between the different hash prefix queries.
+- Trained the sniffer on over 172 TLS encrypted hash prefix queries.
+- The sniffer is able to differentiate between them from passive TLS sniffing ... when the sniffer is working. 
+- The sniffer, (and for that matter the trainer), will frequently stop working and basically record the size of the TLS sessions as garbage. This is almost certainly related to how poorly the TLS parser is currently written. Basically it seems like when I have a "good/reliable" internet connection it works ok, but the second the connection gets weird all my parsing goes out the window.
 - There's enough positive results to date that the attack looks feasible if the attacker has someone working for them that really understands TLS parsing, or already has libraries to do traffic analysis.
