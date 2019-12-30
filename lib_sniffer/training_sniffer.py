@@ -106,6 +106,15 @@ class TrainingSniffer:
             # Check to see if this has data to be processed
             # Looking at the dst port since it will be from the server to the client
             elif dst_port in sessions:
+            
+                # Check to make sure the packet isn't repeated
+                sequence_num = packet[scapy.TCP].seq
+                if sequence_num in sessions[dst_port]['sequence']:
+                    continue
+                    #print("Duplicate sequence number found")
+                    #sessions[dst_port]['valid'] = False
+                
+                sessions[dst_port]['sequence'][sequence_num] = True
                 
                 # Now look to see if there is a data segment that needs to be accounted for
                 #
@@ -135,16 +144,6 @@ class TrainingSniffer:
                     raw_payload = raw_payload[(data_index + 10 + (app_size*2)):]
                     data_index = raw_payload.find('170303')
 
-                    
-                # Check to make sure the packet isn't repeated
-                sequence_num = packet[scapy.TCP].seq
-                if sequence_num in sessions[dst_port]['sequence']:
-                    pass
-                    #print("Duplicate sequence number found")
-                    #sessions[dst_port]['valid'] = False
-                
-                sessions[dst_port]['sequence'][sequence_num] = True
-                    
                 # Check for a Fin/Ack to signify the session completed correctly
                 if packet[scapy.TCP].flags == "FA":
                     sessions[dst_port]['finished'] = True
