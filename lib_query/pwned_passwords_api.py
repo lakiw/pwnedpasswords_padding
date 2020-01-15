@@ -43,7 +43,10 @@ def get_list_for_hash(url, query, hash_prefix):
     s = requests.Session()
     s.mount('https://', MyAdapter())
 
-    r = s.get(url + query + hash_prefix, stream=True)
+    try:
+        r = s.get(url + query + hash_prefix, stream=True)
+    except:
+        return "NO_CONNECTION", None
         
     return r.status_code, r.content
     

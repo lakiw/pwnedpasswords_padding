@@ -15,7 +15,30 @@ import scapy.all as scapy
 from binascii import hexlify
 
     
-## Putting functionality for the sniffer to train a PP hash prefix predictore
+## Used for creating full duplex Scapy sessions
+#
+# Copied from https://pen-testing.sans.org/blog/2017/10/13/scapy-full-duplex-stream-reassembly
+#
+def full_duplex(p):
+    sess = "Other"
+    if 'Ether' in p:
+        if 'IP' in p:
+            if 'TCP' in p:
+                sess = str(sorted(["TCP", p[scapy.IP].src, p[scapy.TCP].sport, p[scapy.IP].dst, p[scapy.TCP].dport],key=str))
+            elif 'UDP' in p:
+                sess = str(sorted(["UDP", p[scapy.IP].src, p[scapy.UDP].sport, p[scapy.IP].dst, p[scapy.UDP].dport] ,key=str))
+            elif 'ICMP' in p:
+                sess = str(sorted(["ICMP", p[scapy.IP].src, p[scapy.IP].dst, p[scapy.ICMP].code, p[scapy.ICMP].type, p[scapy.ICMP].id] ,key=str)) 
+            else:
+                sess = str(sorted(["IP", p[scapy.IP].src, p[scapy.IP].dst, p[scapy.IP].proto] ,key=str)) 
+        elif 'ARP' in p:
+            sess = str(sorted(["ARP", p[scapy.ARP].psrc, p[scapy.ARP].pdst],key=str)) 
+        else:
+            sess = p.sprintf("Ethernet type=%04xr,Ether.type%")
+    return sess    
+    
+    
+## Putting functionality for the sniffer to train a PP hash prefix predictor
 #  into a function to make adding functionality easier in the future
 #
 class TrainingSniffer:
@@ -49,7 +72,7 @@ class TrainingSniffer:
         
         return self._format_results(saved_sessions)
         
-               
+              
     ## Sniffs traffic on an interface and tries to identify pwnedpasswords
     #  hash prefix lookup sessions
     #
@@ -62,96 +85,103 @@ class TrainingSniffer:
     #
     def sniff_pwnedpasswords_sessions(self):
 
-        # Save sessions based on source port of the client
         sessions = {}
 
         ## Capture packets for a given time before processing them as a batch
-        #
-        
+        #        
         # if capture interface is not specified
         if self.interface == None:
             capture = scapy.sniff(store = True, timeout = self.interval_time)
         else:
             capture = scapy.sniff(iface = interface, store = True, timeout = self.interval_time)
+            
+        ## Create the full duplex matching of Scapy sessions
+        #
+        scapy_sessions = capture.sessions(full_duplex)
+        
+        ## Extract the pwned password lookups from the captured TCP sessions
+        #
+        pp_sessions = self._extract_pp_sessions(scapy_sessions)
 
+        return
+        
         ## Process packets
         #
-        #i  = 1
-        for packet in capture:
-            #print("Processing Packet: " + str(i))
-            #i+= 1
-        
-            # Only look at TCP packets
-            if scapy.TCP not in packet:
-                continue
-                
-            # Get the TCP src and dst ports for the packet
-            src_port = str(packet[scapy.TCP].sport)
-            dst_port = str(packet[scapy.TCP].dport)
-            
-            # Easier to look through the raw hex of the packet when parsing it
-            raw_payload = scapy.raw(packet[0]).hex()
-            # Look for pwned password session
-            # Translates into "api.pwnedpasswords.com". This info is seen in the client hello packet
-            if raw_payload.find("6170692e70776e656470617373776f7264732e636f6d") != -1:
-            
-                # Could be a packet retransmit or something, but should not trust this session for training
-                if src_port in sessions:
-                    # print("Warning, see multiple sessions to pwned passwords using the same tcp src port. May create unreliable results")
-                    sessions[src_port]['valid'] = False
-                
-                else:
-                    sessions[src_port] = {'num_data_chunks':0, 'size':0,'dst_ip':str(packet[scapy.IP].dst), 'sequence':{}, 'finished':False, 'valid':True}
-                
-            # Check to see if this has data to be processed
-            # Looking at the dst port since it will be from the server to the client
-            elif dst_port in sessions:
-            
-                # Check to make sure the packet isn't repeated
-                sequence_num = packet[scapy.TCP].seq
-                if sequence_num in sessions[dst_port]['sequence']:
-                    continue
-                    #print("Duplicate sequence number found")
-                    #sessions[dst_port]['valid'] = False
-                
-                sessions[dst_port]['sequence'][sequence_num] = True
-                
-                # Now look to see if there is a data segment that needs to be accounted for
-                #
-                # PoC Note: This will only work for TLS version 1.2
-                # May have false positives as well, haven't created a full
-                # TLS packet parser which would be needed to avoid doing
-                # a simple string search
-                #
-                # 0x17 = Content Type Application Data
-                # 0x0303 = Version TLS 1.2  
-                data_index = raw_payload.find('170303')
-                
-                # There can be multiple application data sections in a single packet
-                while data_index != -1:
-                    sessions[dst_port]['num_data_chunks'] += 1
-                    
-                    app_string = raw_payload[data_index+6:data_index+10]  
-                    if len(app_string) == 0:
-                        sessions[dst_port]['valid'] = False
-                        break
-                    
-                    app_size = int(app_string, 16)
-                    
-                    sessions[dst_port]['size'] += app_size
-                    
-                    # Advance to the next chunk and see if there is more data to process
-                    raw_payload = raw_payload[(data_index + 10 + (app_size*2)):]
-                    data_index = raw_payload.find('170303')
+        for session in scapy_sessions:
 
-                # Check for a Fin/Ack to signify the session completed correctly
-                if packet[scapy.TCP].flags == "FA":
-                    sessions[dst_port]['finished'] = True
+            for packet in session:
+        
+                # Only look at TCP packets
+                if scapy.TCP not in packet:
+                    continue
                 
-                # Check for fragmented packets (since we currently are not handling them
-                if packet[scapy.IP].frag != 0:
-                    print("Fragment packet discovered. Marking session as invalid")
-                    sessions[dst_port]['valid'] = False
+                # Get the TCP src and dst ports for the packet
+                src_port = str(packet[scapy.TCP].sport)
+                dst_port = str(packet[scapy.TCP].dport)
+            
+                # Easier to look through the raw hex of the packet when parsing it
+                raw_payload = scapy.raw(packet[0]).hex()
+                # Look for pwned password session
+                # Translates into "api.pwnedpasswords.com". This info is seen in the client hello packet
+                if raw_payload.find("6170692e70776e656470617373776f7264732e636f6d") != -1:
+                    
+                    # Could be a packet retransmit or something, but should not trust this session for training
+                    if src_port in sessions:
+                        # print("Warning, see multiple sessions to pwned passwords using the same tcp src port. May create unreliable results")
+                        sessions[src_port]['valid'] = False
+                    
+                    else:
+                        sessions[src_port] = {'num_data_chunks':0, 'size':0,'dst_ip':str(packet[scapy.IP].dst), 'sequence':{}, 'finished':False, 'valid':True}
+                    
+                # Check to see if this has data to be processed
+                # Looking at the dst port since it will be from the server to the client
+                elif dst_port in sessions:
+                
+                    # Check to make sure the packet isn't repeated
+                    sequence_num = packet[scapy.TCP].seq
+                    if sequence_num in sessions[dst_port]['sequence']:
+                        continue
+                        #print("Duplicate sequence number found")
+                        #sessions[dst_port]['valid'] = False
+                    
+                    sessions[dst_port]['sequence'][sequence_num] = True
+                    
+                    # Now look to see if there is a data segment that needs to be accounted for
+                    #
+                    # PoC Note: This will only work for TLS version 1.2
+                    # May have false positives as well, haven't created a full
+                    # TLS packet parser which would be needed to avoid doing
+                    # a simple string search
+                    #
+                    # 0x17 = Content Type Application Data
+                    # 0x0303 = Version TLS 1.2  
+                    data_index = raw_payload.find('170303')
+                    
+                    # There can be multiple application data sections in a single packet
+                    while data_index != -1:
+                        sessions[dst_port]['num_data_chunks'] += 1
+                        
+                        app_string = raw_payload[data_index+6:data_index+10]  
+                        if len(app_string) == 0:
+                            sessions[dst_port]['valid'] = False
+                            break
+                        
+                        app_size = int(app_string, 16)
+                        
+                        sessions[dst_port]['size'] += app_size
+                        
+                        # Advance to the next chunk and see if there is more data to process
+                        raw_payload = raw_payload[(data_index + 10 + (app_size*2)):]
+                        data_index = raw_payload.find('170303')
+
+                    # Check for a Fin/Ack to signify the session completed correctly
+                    if packet[scapy.TCP].flags == "FA":
+                        sessions[dst_port]['finished'] = True
+                    
+                    # Check for fragmented packets (since we currently are not handling them
+                    if packet[scapy.IP].frag != 0:
+                        print("Fragment packet discovered. Marking session as invalid")
+                        sessions[dst_port]['valid'] = False
                 
         # The list of all sessions where valid statistics have been collected    
         captured_sessions = []
