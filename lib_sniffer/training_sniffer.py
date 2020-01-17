@@ -12,7 +12,8 @@
 import sys
 import time
 import scapy.all as scapy
-from binascii import hexlify
+from scapy.sessions import IPSession
+import traceback
 
     
 ## Used for creating full duplex Scapy sessions
@@ -69,6 +70,7 @@ class TrainingSniffer:
             #print("Sniffing Wire")
             saved_sessions.extend(self.sniff_pwnedpasswords_sessions())
             #print(saved_sessions)
+            break
         
         return self._format_results(saved_sessions)
         
@@ -85,115 +87,249 @@ class TrainingSniffer:
     #
     def sniff_pwnedpasswords_sessions(self):
 
-        sessions = {}
-
         ## Capture packets for a given time before processing them as a batch
         #        
         # if capture interface is not specified
         if self.interface == None:
-            capture = scapy.sniff(store = True, timeout = self.interval_time)
+            capture = scapy.sniff(store = True, timeout = self.interval_time, session = IPSession)
         else:
-            capture = scapy.sniff(iface = interface, store = True, timeout = self.interval_time)
-            
+            capture = scapy.sniff(iface = self.interface, store = True, timeout = self.interval_time, session = IPSession)
+        
         ## Create the full duplex matching of Scapy sessions
         #
-        scapy_sessions = capture.sessions(full_duplex)
+        scapy_sessions = capture.sessions(full_duplex) 
         
         ## Extract the pwned password lookups from the captured TCP sessions
         #
-        pp_sessions = self._extract_pp_sessions(scapy_sessions)
-
-        return
+        pp_sessions = self._extract_pp_sessions(scapy_sessions)    
         
-        ## Process packets
-        #
-        for session in scapy_sessions:
-
-            for packet in session:
+        traffic_analysis = []
         
-                # Only look at TCP packets
-                if scapy.TCP not in packet:
-                    continue
-                
-                # Get the TCP src and dst ports for the packet
-                src_port = str(packet[scapy.TCP].sport)
-                dst_port = str(packet[scapy.TCP].dport)
-            
-                # Easier to look through the raw hex of the packet when parsing it
-                raw_payload = scapy.raw(packet[0]).hex()
-                # Look for pwned password session
-                # Translates into "api.pwnedpasswords.com". This info is seen in the client hello packet
-                if raw_payload.find("6170692e70776e656470617373776f7264732e636f6d") != -1:
-                    
-                    # Could be a packet retransmit or something, but should not trust this session for training
-                    if src_port in sessions:
-                        # print("Warning, see multiple sessions to pwned passwords using the same tcp src port. May create unreliable results")
-                        sessions[src_port]['valid'] = False
-                    
-                    else:
-                        sessions[src_port] = {'num_data_chunks':0, 'size':0,'dst_ip':str(packet[scapy.IP].dst), 'sequence':{}, 'finished':False, 'valid':True}
-                    
-                # Check to see if this has data to be processed
-                # Looking at the dst port since it will be from the server to the client
-                elif dst_port in sessions:
-                
-                    # Check to make sure the packet isn't repeated
-                    sequence_num = packet[scapy.TCP].seq
-                    if sequence_num in sessions[dst_port]['sequence']:
-                        continue
-                        #print("Duplicate sequence number found")
-                        #sessions[dst_port]['valid'] = False
-                    
-                    sessions[dst_port]['sequence'][sequence_num] = True
-                    
-                    # Now look to see if there is a data segment that needs to be accounted for
-                    #
-                    # PoC Note: This will only work for TLS version 1.2
-                    # May have false positives as well, haven't created a full
-                    # TLS packet parser which would be needed to avoid doing
-                    # a simple string search
-                    #
-                    # 0x17 = Content Type Application Data
-                    # 0x0303 = Version TLS 1.2  
-                    data_index = raw_payload.find('170303')
-                    
-                    # There can be multiple application data sections in a single packet
-                    while data_index != -1:
-                        sessions[dst_port]['num_data_chunks'] += 1
-                        
-                        app_string = raw_payload[data_index+6:data_index+10]  
-                        if len(app_string) == 0:
-                            sessions[dst_port]['valid'] = False
-                            break
-                        
-                        app_size = int(app_string, 16)
-                        
-                        sessions[dst_port]['size'] += app_size
-                        
-                        # Advance to the next chunk and see if there is more data to process
-                        raw_payload = raw_payload[(data_index + 10 + (app_size*2)):]
-                        data_index = raw_payload.find('170303')
+        for session in pp_sessions:
+            payload_size, payload_chunks = self._calculate_payload_size(session['packets'])
 
-                    # Check for a Fin/Ack to signify the session completed correctly
-                    if packet[scapy.TCP].flags == "FA":
-                        sessions[dst_port]['finished'] = True
-                    
-                    # Check for fragmented packets (since we currently are not handling them
-                    if packet[scapy.IP].frag != 0:
-                        print("Fragment packet discovered. Marking session as invalid")
-                        sessions[dst_port]['valid'] = False
-                
-        # The list of all sessions where valid statistics have been collected    
-        captured_sessions = []
+        return traffic_analysis
     
 
-        # Add the valid sessions to the return value
-        for stream in sessions.values():
-            if stream['finished'] == True:
-                if stream['valid'] == True:
-                    captured_sessions.append((stream['size'],stream['num_data_chunks']))
+    ## Extracts pwned password sessions from scapy sniffed traffic
+    #
+    def _extract_pp_sessions(self, scapy_sessions):
+        
+        pp_sessions = []
+        # Loop through all of the sessions and identify if they contain abs
+        # connection to the pwned passwords server
+        for session in scapy_sessions.values():
+            # Not a TCP session that this tool can parsed
+            if not self._is_valid_tcp_session(session):
+                continue
+            # Search for the cert for the pwned password session
+            start_id = self._detect_pp_cert(session)
+            
+            # If this session isn't identified as a PP session, skip it
+            if start_id == None:
+                continue
+                
+            # Parse the full session to figure out if we collected all the
+            # packets we are interested in            
+            parsed_session = self._order_session(session, start_id[1])
+            
+            # Didn't parse the full session correctly.
+            # Did not sniff all the packets.
+            if parsed_session == None:
+                continue
+                
+            # Add the data to pp_sessions
+            session_data = {
+                'packets':parsed_session
+            }
+            pp_sessions.append(session_data)
+          
+        return pp_sessions
+        
+    
+    ## Identify sessions to skip further parsing
+    #
+    # Note: Skipping it could be "non-TCP session", or unsupported
+    #       TCP artificats. An example of that currently would be TCP
+    #       fragmentation
+    #
+    # Values:
+    #    session: A Scapy collected session
+    #
+    # Return:
+    #     True: if this session can be parsed by the current TCP parser
+    #
+    #     False: If this session is not TCP, and/or can not be parsed
+    #
+    def _is_valid_tcp_session(self, session):
+    
+        for packet in session:
+        
+            # Found a non-TCP session
+            if scapy.TCP not in packet:
+                return False
+            
+            # Check to see if it is an IP packet
+            # I know, if it's TCP it will likely be IP, but who knows it
+            # could be a really weird network, and the check is easy
+            if scapy.IP not in packet:
+                return False
+                
+            ## Currently not supporting IP fragmentation
+            #
+            # That being said, the Scapy IPSession sniffer session "should"
+            # handle fragment reassembly
+            #
+            if packet[scapy.IP].frag != 0:
+                print("Fragment packet discovered. Marking session as invalid")
+                return False
+                
+        return True
+        
+    
+    ## Looks for the pwned passwords api URL in the TLS certificates
+    #
+    # Values:
+    #    session: A Scapy collected session
+    #
+    # Return:
+    #     None: if a PwnedPasswords TLS cert was not found
+    #
+    #     (Sequence_Num, Ack_Num): if a pwned passwords TLS cert was found
+    #
+    def _detect_pp_cert(self, session):
+
+        for packet in session:
+                
+            # Easier to look through the raw hex of the packet when parsing it
+            try:
+                raw_payload = packet.load.hex()
+            except:
+                # There is no data payload of the packet
+                continue
+            
+            # Look for pwned password session
+            # Translates into "api.pwnedpasswords.com". This info is seen in the client hello packet
+            if raw_payload.find("6170692e70776e656470617373776f7264732e636f6d") != -1:
+                # print("Found PP Session!")
+                
+                return (packet[scapy.TCP].seq, packet[scapy.TCP].ack)
+            
+        return None
+        
+    
+    ## Orders a session to verify Scapy collected all of the packets
+    #
+    def _order_session(self, session, seq):
+        
+        ordered_session = []
+        
+        # Loop through all of the packets until we hit the fin packet
+        keep_looping = True
+        while keep_looping:
+            keep_looping = False
+            for packet in session:
+                if packet[scapy.TCP].seq == seq:
+                    ordered_session.append(packet)
                     
-        return captured_sessions
+                    ## If we have finished parsing this stream
+                    if packet[scapy.TCP].flags == "FA":
+                        # print("Finished parsing a session")
+                        return ordered_session
+                    
+                    ## Else calculate the next sequence number to look for
+                    try:
+                        seq += len(packet[scapy.Raw])
+                    except:
+                        # For some reason, some scapy packets don't have the
+                        # "raw" layer.
+                        return None
+                        
+                    keep_looping = True
+              
+        return None
+    
+    
+    ## Calculates the size of the payload of the server's response to 
+    #  a query to the Pwned Passwords server
+    #
+    # Variables:
+    #    session: A parsed pp session of the server responses
+    #
+    # Return Values:
+    #    size, num_data_sections: The payload size, and the number of 
+    #                             data sections parsed
+    #
+    def _calculate_payload_size(self, session):
+    
+        # Number of data chunks parsed
+        # Note: a single packet can have multiple data chunks
+        # Note2: This is important since data chunks can have a checksum
+        #        and may have padding
+        num_data_chunks = 0
+        
+        # Size of payload data
+        payload_size = 0
+    
+        for packet in session:
+        
+            # Easier to look through the raw hex of the packet when parsing it
+            try:
+                raw_payload = packet.load.hex()
+            except:
+                # There is no data payload of the packet
+                continue
+            
+            # Now look to see if there is a data segment that needs to be accounted for
+            #
+            # PoC Note: This will only work for TLS version 1.2
+            # May have false positives as well, haven't created a full
+            # TLS packet parser which would be needed to avoid doing
+            # a simple string search
+            #
+            # 0x17 = Content Type Application Data
+            # 0x0303 = Version TLS 1.2  
+            data_index = raw_payload.find('170303')
+            # There can be multiple application data sections in a single packet
+            while data_index != -1:
+                
+                num_data_chunks += 1
+                
+                app_string = raw_payload[data_index+7:data_index+11]  
+                if len(app_string) == 0:
+                    return None, None
+                
+                app_size = int(app_string, 16)
+                
+                #print(raw_payload)
+                #print("App String: " + str(app_string))
+                #print("Size: " + str(app_size))
+                #input("Hit Enter")
+                
+                payload_size += app_size
+                
+                if len(raw_payload) < data_index + 11 + 2 +(app_size*2):
+                    print("Hmmm, should be throwing an exception")
+                
+                # Advance to the next chunk and see if there is more data to process
+                try:
+                    raw_payload = raw_payload[data_index + 11 + 2 + (app_size*2):]
+                except:
+                    print("Packet data did not exist")
+                    return None, None
+                    
+                data_index = raw_payload.find('170303')
+                    
+    
+        # If no data was observed
+        if payload_size == 0:
+            return None, None
+            
+        # Take out sha checksum from payload size
+        payload_size = payload_size - (20 * num_data_chunks)
+            
+        print(str(payload_size) + " : " + str(num_data_chunks))
+        return payload_size, num_data_chunks
         
         
     ## Formatting for returning data to the training program

@@ -43,6 +43,7 @@ import argparse
 import time
 from multiprocessing import Process, Queue
 import json
+import traceback
 
 # Local imports
 from lib_query.query_process import launch_query_process
@@ -231,6 +232,7 @@ def main():
                 keep_querying = False
                 
     except Exception as msg:
+        traceback.print_exc()
         print ("Exception: " + str(msg))
             
     query_ptoc_queue.put({'action':'stop'})    
