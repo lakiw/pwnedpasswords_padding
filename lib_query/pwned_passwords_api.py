@@ -13,6 +13,7 @@ import requests
 
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.poolmanager import PoolManager
+from urllib3.exceptions import InsecureRequestWarning
 import ssl
 
 
@@ -43,7 +44,19 @@ def get_list_for_hash(url, query, hash_prefix):
     s = requests.Session()
     s.mount('https://', MyAdapter())
 
-    r = s.get(url + query + hash_prefix, stream=True)
+    try:
+        ## General Note: Not verifying TLS certificate information to make
+        #  testing against other servers easier.
+    
+        # Suppress only the single warning from urllib3 needed.
+        requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+    
+        # Make the actual query
+        r = s.get(url + query + hash_prefix, stream=True, verify=False)
+        
+    except Exception as msg:
+        print("Exception: " + str(msg))
+        return "NO_CONNECTION", None
         
     return r.status_code, r.content
     

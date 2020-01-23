@@ -147,6 +147,10 @@ def main():
     while (keep_querying):
         status_code, content = get_list_for_hash('https://api.pwnedpasswords.com/', 'range/',hash_prefix.get_value())
         
+        # If no content was received, try again
+        if content == None:
+            continue
+        
         result = str(hash_prefix.get_value() + '\t' + str(status_code) + "\t" + str(len(content)))
         
         # Output the results
