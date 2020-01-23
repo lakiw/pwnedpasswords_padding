@@ -189,15 +189,15 @@ def main():
         
     hash_prefix = HashPrefix(initial= initial_prefix, length= prefix_len)
     
-    # Open up the save file if specified
+    # If a hash prefix is not specified, create/erase the save file
+    # This depends of course of if a save file was specified or not
     if program_info['filename'] != None:
-        # If a hash prefix is specified, append vs overwrite
-        if program_info['start_prefix'] != None:
-            save_file = open(program_info['filename'], 'a')
-        else:
-            save_file = open(program_info['filename'], 'w')
-    
-    
+        if program_info['start_prefix'] == None:
+            try:
+                open(program_info['filename'], 'w').close()
+            except:
+                pass
+   
     # Used to specify if the queries should continue
     keep_querying = True
     
@@ -223,8 +223,14 @@ def main():
             # Save to file if a file was specified
             if program_info['filename'] != None:
                 save_results ={hash_prefix.get_value():results}
-                json.dump(save_results, save_file)
-                save_file.write("\n")
+                try:
+                    save_file = open(program_info['filename'], 'a')
+                    json.dump(save_results, save_file)
+                    save_file.write("\n")
+                    save_file.close()
+                except:
+                    print("Error trying to write to the save file")
+                    raise
                    
             # Increment the hash prefix
             # If we are at the end of the keyspace, stop querying

@@ -70,7 +70,6 @@ class TrainingSniffer:
             #print("Sniffing Wire")
             saved_sessions.extend(self.sniff_pwnedpasswords_sessions())
             #print(saved_sessions)
-            break
         
         return self._format_results(saved_sessions)
         
@@ -107,6 +106,9 @@ class TrainingSniffer:
         
         for session in pp_sessions:
             payload_size, payload_chunks = self._calculate_payload_size(session['packets'])
+            
+            if payload_size != None:
+                traffic_analysis.append((payload_size, payload_chunks))
 
         return traffic_analysis
     
@@ -246,7 +248,8 @@ class TrainingSniffer:
                         return None
                         
                     keep_looping = True
-              
+        
+        print("Pwned Password session detected but dropped due to missing packets")
         return None
     
     
@@ -255,6 +258,8 @@ class TrainingSniffer:
     #
     # Variables:
     #    session: A parsed pp session of the server responses
+    #
+    #    checksum_size: The size of the checksum for each data chunk
     #
     # Return Values:
     #    size, num_data_sections: The payload size, and the number of 
@@ -270,6 +275,9 @@ class TrainingSniffer:
         
         # Size of payload data
         payload_size = 0
+        
+        # If the encryption mode was detected
+        known_iv_padding = False
     
         for packet in session:
         
@@ -279,56 +287,52 @@ class TrainingSniffer:
             except:
                 # There is no data payload of the packet
                 continue
-            
+             
             # Now look to see if there is a data segment that needs to be accounted for
             #
-            # PoC Note: This will only work for TLS version 1.2
-            # May have false positives as well, haven't created a full
-            # TLS packet parser which would be needed to avoid doing
-            # a simple string search
-            #
-            # 0x17 = Content Type Application Data
-            # 0x0303 = Version TLS 1.2  
-            data_index = raw_payload.find('170303')
+            payload_info = self.identify_tls_payload_type(raw_payload)
+            #print(payload_info)
+
             # There can be multiple application data sections in a single packet
-            while data_index != -1:
+            while payload_info != None:
                 
-                num_data_chunks += 1
+                # If this is a server hello packet (identify the encryption mode)
+                if (payload_info['type'] == 16) and (payload_info['sub_type'] == 'server_hello'):
+                    known_iv_padding, iv_size, checksum_size = self._identify_encrytion_overhead(payload_info['cipher'])
                 
-                app_string = raw_payload[data_index+7:data_index+11]  
-                if len(app_string) == 0:
-                    return None, None
+                # If an application data payload
+                elif payload_info['type'] == 17:
                 
-                app_size = int(app_string, 16)
-                
-                #print(raw_payload)
-                #print("App String: " + str(app_string))
-                #print("Size: " + str(app_size))
-                #input("Hit Enter")
-                
-                payload_size += app_size
-                
-                if len(raw_payload) < data_index + 11 + 2 +(app_size*2):
-                    print("Hmmm, should be throwing an exception")
-                
+                    # Sanity check to make sure we detected the cipher suite being used
+                    if known_iv_padding != True:
+                        print("Unknown cipher suite, aborting this session")
+                        return None, None
+                        
+                    num_data_chunks += 1
+                    
+                    # Add to the payload size, but remove the overhead of the IV and checksum
+                    if payload_info['size'] < (checksum_size + iv_size):
+                        #print("Hmm, the payload seems too small")
+                        payload_size += payload_info['size']
+                    
+                    # Remove the overhead of the IV and checksum
+                    else:
+                        payload_size += (payload_info['size'] - checksum_size - iv_size)
+                         
                 # Advance to the next chunk and see if there is more data to process
                 try:
-                    raw_payload = raw_payload[data_index + 11 + 2 + (app_size*2):]
+                    raw_payload = raw_payload[payload_info['next_section']:]
                 except:
                     print("Packet data did not exist")
                     return None, None
                     
-                data_index = raw_payload.find('170303')
-                    
-    
+                payload_info = self.identify_tls_payload_type(raw_payload)        
+         
         # If no data was observed
-        if payload_size == 0:
-            return None, None
-            
-        # Take out sha checksum from payload size
-        payload_size = payload_size - (20 * num_data_chunks)
-            
-        print(str(payload_size) + " : " + str(num_data_chunks))
+        if payload_size <= 0:
+            return None, None           
+           
+        #print(str(payload_size) + " : " + str(num_data_chunks))
         return payload_size, num_data_chunks
         
         
@@ -350,4 +354,152 @@ class TrainingSniffer:
                 results[item[1]][item[0]] += 1
                 
         return results
+        
+    ## Returns if the ciphersuite was identified, along with the overhead of
+    #  the MAC and IV for the ciphersuite
+    #
+    # Return
+    #     False, 0, 0: if an error occured, or cipher suite isn't supported
+    #
+    #     True, IV, MAC: If it was processed correctly
+    #
+    def _identify_encrytion_overhead(self, cipher_mode):
     
+        # TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        if cipher_mode == 'c02b':
+            #iv = 4 (salt) + 8 (explicit nonce) + 9 (additional authentication data AAD)
+            #mac = 16 (sha256, but it seems only to store half)
+            return True, 4+8+9, 16
+        else:
+            print ("Unsupported cipher suite")
+            return False, 0 , 0
+    
+    
+    ## Will identify the TLS payload type for the packet_section
+    #
+    # Returns a dictionary containing info about the payload type
+    #
+    #     Top level key is type. Other keys in dictionary depend on type.
+    #         aka 'type':16 = TLS Hello handshake
+    #             'type':17 = TLS application data section
+    # 
+    # Returns None, if the data was invalid for a TLS payload type
+    #
+    def identify_tls_payload_type(self, packet_section):
+        
+        ## Note, the record header should be at the very begining of the sections
+        result = {}
+        
+        # Data sanity check
+        if packet_section == None:
+            print("null packet")
+            return None
+            
+        if len(packet_section) < 6:
+            #print("Too small packet")
+            return None
+        
+        # Quick bail out if not a supported TLS type, (all start with '1')
+        if packet_section[0] != '1':
+            return None
+            
+        ## Check the protocol version
+        if packet_section[2:5] != '030':
+            # Invalid TLS protocol number
+            return None
+        
+        # TLS 1.0 (wow old). See it sometimes in the initial client hello
+        if packet_section[5] == '1':
+            result['tls_version'] = '1.0'
+        # TLS 1.1 (still old)
+        elif packet_section[5] == '2':
+            result['tls_version'] = '1.1'
+        # TLS 1.2 (currently all that is supported for this tool)
+        elif packet_section[5] == '3':
+            result['tls_version'] = '1.2'
+        # TLS 1.3
+        elif packet_section[5] == '4':
+            result['tls_version'] = '1.3'
+        # Unsupported TLS type
+        else:
+            print("invalid TLS protocol number, (version)")
+            return None
+        
+        # Default value, should be overridden by each section as I add the parsing
+        # for it
+        result['next_section'] = 6
+        
+        ## Check section type
+        
+        # Change cipher spec
+        if packet_section[1] == '4':
+            result['type'] = 14
+            
+        # Alert record
+        elif packet_section[1] == '5':
+            result['type'] = 15
+        
+        # If a hello handshake (starts with '16')
+        elif packet_section[1] == '6':
+            result['type'] = 16
+            
+            result['next_section'] += int(packet_section[6:10], 16)
+            
+            ## Get the handshake type
+            if packet_section[10:12] == "01":
+                result['sub_type'] = "client_hello"
+           
+            elif packet_section[10:12] == "02":
+                result['sub_type'] = "server_hello"
+                
+                # Advance through the packet:
+                cur_section = packet_section[22:]
+                
+                # Server random number. Starts with timestamp sometimes
+                # not currently using this
+                server_random = cur_section[:64]
+                cur_section = cur_section[64:]
+                
+                # Session id for restarting sessions
+                # not currently using this
+                session_id_len = int(cur_section[0:2],16)
+                session_id = cur_section[2:2+session_id_len * 2]
+                
+                # Grab the cipher suite selection which is what this application
+                # really cares about
+                cur_section = cur_section[2+ (session_id_len * 2):]
+                cipher_suite = cur_section[0:4]
+                result['cipher'] = cipher_suite
+                
+                # Grab the compression method which will also be important for
+                # doing traffic analysis
+                compression_method = cur_section[4:6]
+                result['compression'] = compression_method
+    
+            elif packet_section[10:12] == "0b":
+                result['sub_type'] = "server_certificate"
+                
+            elif packet_section[10:12] == "0e":
+                result['sub_type'] = "server_hello_done"
+            
+            else:
+                # print("Don't know what type of hello packet this is")
+                # print( packet_section[10:12])
+                return None
+                
+        # If application data section (starts with '17')
+        elif packet_section[1] == '7':
+            result['type'] = 17
+            result['next_section'] += int(packet_section[6:10], 16)
+            
+            ## Find out how much application data is being sent
+            result['size'] = int(packet_section[6:10],16)
+                  
+        # Unsupported type
+        else:
+            print("Unsupported type")
+            print(packet_section[0:5])
+            return None
+        
+        return result
+            
