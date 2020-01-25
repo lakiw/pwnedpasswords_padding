@@ -52,11 +52,12 @@ class TrainingSniffer:
     #   num_samples: The minimun number of samples to collect for each
     #                hash prefix
     #
-    def __init__(self, interval_time, num_samples, interface = None):
+    def __init__(self, interval_time, num_samples, interface = None, pcap_file = None):
 
         self.interval_time = interval_time
         self.num_samples = num_samples
         self.interface = interface
+        self.pcap_file = pcap_file
     
     
     ## Sniff the network interface and collect statistics on the pp sessions
@@ -69,7 +70,11 @@ class TrainingSniffer:
         while len(saved_sessions) < self.num_samples :
             #print("Sniffing Wire")
             saved_sessions.extend(self.sniff_pwnedpasswords_sessions())
-            #print(saved_sessions)
+            
+            # Quick bail out if we are using a pcap file vs. sniffing the wire
+            if self.pcap_file != None:
+                print("Done parsing the pcap file")
+                break
         
         return self._format_results(saved_sessions)
         
@@ -86,10 +91,18 @@ class TrainingSniffer:
     #
     def sniff_pwnedpasswords_sessions(self):
 
+        ## If reading from a pcap file vs. sniffing the wire
+        if self.pcap_file != None:
+            try:
+                capture = scapy.rdpcap(self.pcap_file)
+            except:
+                print("Error trying to process pcap file. Exiting")
+                return None
+
         ## Capture packets for a given time before processing them as a batch
         #        
         # if capture interface is not specified
-        if self.interface == None:
+        elif self.interface == None:
             capture = scapy.sniff(store = True, timeout = self.interval_time, session = IPSession)
         else:
             capture = scapy.sniff(iface = self.interface, store = True, timeout = self.interval_time, session = IPSession)
