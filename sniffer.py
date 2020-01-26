@@ -301,6 +301,11 @@ def process_results(hash_stats, results, search_range = 10, min_limit_for_high =
         print("------ " + str(num_packets) + " TLS Application Data Sections:----------------")
         print()
         
+        if num_packets not in guessed_prefixes:
+            print("\tAll sessions containing this number of data sections were uncategoriezed")
+            print()
+            continue
+        
         for size in sorted(results[num_packets]):
             print("Size of Session: " + str(size))
             print()
