@@ -261,7 +261,11 @@ class TrainingSniffer:
                         return None
                         
                     keep_looping = True
-        
+                    
+        # Temporary being used for debugging
+        #if len(ordered_session) > 10:
+        #    return ordered_session
+            
         print("Pwned Password session detected but dropped due to missing packets")
         return None
     
