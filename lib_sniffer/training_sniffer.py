@@ -138,26 +138,27 @@ class TrainingSniffer:
             if not self._is_valid_tcp_session(session):
                 continue
             # Search for the cert for the pwned password session
-            start_id = self._detect_pp_cert(session)
+            client_tcp_seq, server_tcp_seq = self._detect_pp_cert(session)
             
             # If this session isn't identified as a PP session, skip it
-            if start_id == None:
+            if server_tcp_seq == None:
                 continue
                 
             # Parse the full session to figure out if we collected all the
             # packets we are interested in            
-            parsed_session = self._order_session(session, start_id[1])
+            parsed_sessions = self._order_session(session, client_tcp_seq, server_tcp_seq)
             
             # Didn't parse the full session correctly.
             # Did not sniff all the packets.
-            if parsed_session == None:
+            if parsed_sessions == None:
                 continue
                 
             # Add the data to pp_sessions
-            session_data = {
-                'packets':parsed_session
-            }
-            pp_sessions.append(session_data)
+            for individual_lookup in parsed_sessions:
+                session_data = {
+                    'packets':individual_lookup
+                }
+                pp_sessions.append(session_data)
           
         return pp_sessions
         
@@ -208,9 +209,9 @@ class TrainingSniffer:
     #    session: A Scapy collected session
     #
     # Return:
-    #     None: if a PwnedPasswords TLS cert was not found
+    #     None, None: if a PwnedPasswords TLS cert was not found
     #
-    #     (Sequence_Num, Ack_Num): if a pwned passwords TLS cert was found
+    #     Sequence_Num, Ack_Num: if a pwned passwords TLS cert was found
     #
     def _detect_pp_cert(self, session):
 
@@ -228,33 +229,44 @@ class TrainingSniffer:
             if raw_payload.find("6170692e70776e656470617373776f7264732e636f6d") != -1:
                 # print("Found PP Session!")
                 
-                return (packet[scapy.TCP].seq, packet[scapy.TCP].ack)
+                return packet[scapy.TCP].seq, packet[scapy.TCP].ack
             
-        return None
+        return None, None
         
     
     ## Orders a session to verify Scapy collected all of the packets
     #
-    def _order_session(self, session, seq):
+    # Note: Modified this since there may be multiple PP lookups in a signle
+    #       session, so now it returns a list of all lookups, and those lookups
+    #       contain a list of all the packets from the PP server associated with
+    #       a particular hash lookup query.
+    #
+    def _order_session(self, session, client_seq, server_seq):
         
-        ordered_session = []
+        ordered_sessions = []
         
         # Loop through all of the packets until we hit the fin packet
         keep_looping = True
         while keep_looping:
+            individual_lookup = []
             keep_looping = False
             for packet in session:
-                if packet[scapy.TCP].seq == seq:
-                    ordered_session.append(packet)
+                if packet[scapy.TCP].seq == server_seq:
+                    individual_lookup.append(packet)
                     
                     ## If we have finished parsing this stream
                     if packet[scapy.TCP].flags == "FA":
                         # print("Finished parsing a session")
-                        return ordered_session
+                        
+                        # Save the last individual_lookup before returning
+                        # all of the lookups
+                        orderd_sessions.append(individual_lookup)
+                        
+                        return ordered_sessions
                     
                     ## Else calculate the next sequence number to look for
                     try:
-                        seq += len(packet[scapy.Raw])
+                        server_seq += len(packet[scapy.Raw])
                     except:
                         # For some reason, some scapy packets don't have the
                         # "raw" layer.
