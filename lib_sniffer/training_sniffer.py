@@ -260,7 +260,7 @@ class TrainingSniffer:
                         
                         # Save the last individual_lookup before returning
                         # all of the lookups
-                        orderd_sessions.append(individual_lookup)
+                        ordered_sessions.append(individual_lookup)
                         
                         return ordered_sessions
                     
